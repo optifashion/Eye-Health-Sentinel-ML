@@ -1,0 +1,54 @@
+import argparse
+import pandas as pd
+import tensorflow as tf
+from model import build_model
+from sklearn.metrics import roc_auc_score
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--epochs', type=int, default=20)
+    parser.add_argument('--distill', action='store_true')
+    args = parser.parse_args()
+
+    df = pd.read_parquet('data/processed.parquet')
+    X = tf.convert_to_tensor(df[['image_path']].values)
+    y = df['label'].values
+
+    model = build_model()
+    model.compile(optimizer='adam', loss='binary_crossentropy')
+    model.fit(X, y, epochs=args.epochs)
+    preds = model.predict(X)
+    auroc = roc_auc_score(y, preds)
+    print(f"Training AUROC: {auroc:.3f}")
+    model.save('model.ckpt')
+
+import argparse
+import tensorflow as tf
+
+if __name__=='__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model-path', required=True)
+    parser.add_argument('--output', required=True)
+    args = parser.parse_args()
+    model = tf.keras.models.load_model(args.model_path)
+    converter = tf.lite.TFLiteConverter.from_keras_model(model)
+    tflite_model = converter.convert()
+    with open(f"{args.output}", 'wb') as f:
+        f.write(tflite_model)
+
+import time
+import numpy as np
+import tflite_runtime.interpreter as tflite
+
+interpreter = tflite.Interpreter(model_path='tflite/model.tflite')
+interpreter.allocate_tensors()
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+
+def predict(image: np.ndarray) -> float:
+    interpreter.set_tensor(input_details[0]['index'], image)
+    start = time.time()
+    interpreter.invoke()
+    latency = (time.time() - start) * 1000
+    pred = interpreter.get_tensor(output_details[0]['index'])[0][0]
+    return pred, latency
